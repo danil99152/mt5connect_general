@@ -1,7 +1,6 @@
 import settings
 from model.DealComment import DealComment
 from model.MetaTrader5Wrapper import MetaTrader5Wrapper
-from model.TradingRobot import TradingRobot
 
 
 class LinkedPositions:
@@ -11,18 +10,15 @@ class LinkedPositions:
     symbol: str
     type: int
 
-    __slots__ = ['mt5wrapper', 'trading_robot', 'lieder_ticket',
+    __slots__ = ['mt5wrapper', 'lieder_ticket',
                  'positions', 'symbol', 'type', 'volume']
 
     def __init__(self, lieder_ticket, investor_positions=None):
         self.mt5wrapper = MetaTrader5Wrapper()
-        self.trading_robot = TradingRobot()
         self.lieder_ticket = lieder_ticket
         self.positions = []
         self.symbol = ''
         self.type = -1
-        if not investor_positions:
-            investor_positions = self.trading_robot.get_investor_positions()
         for pos in investor_positions:
             comment = DealComment().set_from_string(pos.comment)
             if comment.lieder_ticket == self.lieder_ticket:
@@ -46,11 +42,11 @@ class LinkedPositions:
             return comment.lieder_ticket
         return -1
 
-    def get_linked_positions_table(self):
+    @staticmethod
+    def get_linked_positions_table(investor_positions):
         """Получение таблицы позиций инвестора, сгруппированных по тикету позиции лидера"""
         stored_ticket = []
         positions_table = []
-        investor_positions = self.trading_robot.get_investor_positions()
         for pos in investor_positions:
             lid_ticket = LinkedPositions.get_positions_lieder_ticket(pos)
             if lid_ticket not in stored_ticket:

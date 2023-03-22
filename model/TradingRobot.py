@@ -13,14 +13,13 @@ from model.LinkedPositions import LinkedPositions
 
 
 class TradingRobot:
-    __slots__ = ['linked_positions', 'deal_comment', 'lieder_positions',
+    __slots__ = ['deal_comment', 'lieder_positions',
                  'investors_disconnect_store', 'mt5wrapper', 'source',
                  'lieder_existed_position_tickets', 'start_date_utc',
                  'lieder_balance', 'lieder_equity', 'input_positions',
                  'EURUSD', 'USDRUB', 'EURRUB', 'trading_event', 'event_loop']
 
     def __init__(self):
-        self.linked_positions = LinkedPositions
         self.deal_comment = DealComment()
         self.lieder_positions = []
         self.investors_disconnect_store = [[], []]
@@ -499,7 +498,8 @@ class TradingRobot:
                     volume_change_coefficient = investors_balance / settings.old_investors_balance[login]
                     if volume_change_coefficient != 1.0:
                         self.mt5wrapper.init_mt(investor)
-                        investors_positions_table = self.linked_positions.get_linked_positions_table()
+                        investors_positions_table = LinkedPositions.get_linked_positions_table(
+                            self.get_investor_positions())
                         for _ in investors_positions_table:
                             min_lot = self.mt5wrapper.get_symbol_info(_.symbol).volume_min
                             decimals = str(min_lot)[::-1].find('.')

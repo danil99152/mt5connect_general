@@ -27,7 +27,7 @@ class MetaTrader5Wrapper:
 
     @staticmethod
     def get_positions():
-        Mt.positions_get()
+        return Mt.positions_get()
 
     @staticmethod
     async def patching_quotes():
