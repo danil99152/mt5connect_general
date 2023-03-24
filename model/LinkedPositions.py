@@ -1,6 +1,5 @@
 import settings
 from model.DealComment import DealComment
-from model.MetaTrader5Wrapper import MetaTrader5Wrapper
 
 
 class LinkedPositions:
@@ -10,11 +9,10 @@ class LinkedPositions:
     symbol: str
     type: int
 
-    __slots__ = ['mt5wrapper', 'lieder_ticket',
+    __slots__ = ['lieder_ticket',
                  'positions', 'symbol', 'type', 'volume']
 
     def __init__(self, lieder_ticket, investor_positions=None):
-        self.mt5wrapper = MetaTrader5Wrapper()
         self.lieder_ticket = lieder_ticket
         self.positions = []
         self.symbol = ''

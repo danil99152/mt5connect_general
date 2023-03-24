@@ -1,3 +1,2 @@
-MetaTrader5~=5.0.44
 requests~=2.28.2
 aiohttp~=3.8.4

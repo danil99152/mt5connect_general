@@ -7,14 +7,13 @@ import aiohttp
 import requests
 
 import settings
-from model.MetaTrader5Wrapper import MetaTrader5Wrapper
 from model.DealComment import DealComment
 from model.LinkedPositions import LinkedPositions
 
 
 class TradingRobot:
     __slots__ = ['deal_comment', 'lieder_positions',
-                 'investors_disconnect_store', 'mt5wrapper', 'source',
+                 'investors_disconnect_store', 'source',
                  'lieder_existed_position_tickets', 'start_date_utc',
                  'lieder_balance', 'lieder_equity', 'input_positions',
                  'EURUSD', 'USDRUB', 'EURRUB', 'trading_event', 'event_loop']
@@ -23,7 +22,6 @@ class TradingRobot:
         self.deal_comment = DealComment()
         self.lieder_positions = []
         self.investors_disconnect_store = [[], []]
-        self.mt5wrapper = MetaTrader5Wrapper()
         self.source = settings.source
         self.lieder_existed_position_tickets = settings.lieder_existed_position_tickets
         self.start_date_utc = settings.start_date_utc
@@ -55,14 +53,14 @@ class TradingRobot:
         if len(response) > 0:
             response = response[0]
             main_source['lieder'] = {
-                'terminal_path': r'C:\Program Files\MetaTrader 5\terminal64.exe',
+                'address': r'http://localhost:8000/investor/',
                 'login': int(response['leader_login']),
                 'password': response['leader_password'],
                 'server': response['leader_server']
             }
             main_source['investors'] = [
                 {
-                    'address': r'http://localhost:8000/investor/',
+                    'address': r'http://localhost:8001/investor/',
                     'login': int(response['investor_one_login']),
                     'password': response['investor_one_password'],
                     'server': response['investor_one_server'],
@@ -107,7 +105,7 @@ class TradingRobot:
                     "comment": response['comment'],
                 },
                 {
-                    'address': r'http://localhost:8001/investor/',
+                    'address': r'http://localhost:8002/investor/',
                     'login': int(response['investor_two_login']),
                     'password': response['investor_two_password'],
                     'server': response['investor_two_server'],
@@ -160,17 +158,20 @@ class TradingRobot:
             prev_date = main_source['settings']['created_at'].split('.')
             self.start_date_utc = datetime.strptime(prev_date[0], "%Y-%m-%dT%H:%M:%S")
 
-            self.mt5wrapper.init_mt(main_source['lieder'])
-            inf = self.mt5wrapper.get_account_info()
-            main_source['lieder']['currency'] = inf.currency if inf else '-'
+            requests.post(url=main_source['lieder']['address'] + 'init/',
+                          json=main_source['lieder'])
+
+            inf = dict(requests.get(url=main_source['lieder']['address'] + 'get-account-info/'))
+
+            main_source['lieder']['currency'] = inf.get('currency') if inf else '-'
             for _ in main_source['investors']:
                 try:
                     idx = main_source['investors'].index(_)
-                    requests.post(url=main_source['investors'][idx]['address']+'init-terminal/',
+                    requests.post(url=main_source['investors'][idx]['address'] + 'init/',
                                   json=main_source['investors'][idx])
 
-                    inf = self.mt5wrapper.get_account_info()
-                    main_source['investors'][idx]['currency'] = inf.currency if inf else '-'
+                    inf = dict(requests.get(url=main_source['investors'][idx]['address'] + 'get-account-info/'))
+                    main_source['investors'][idx]['currency'] = inf.get('currency') if inf else '-'
                 except Exception as e:
                     print("Request init mt5:", e)
         else:
@@ -206,15 +207,17 @@ class TradingRobot:
     async def update_lieder_info(self, sleep=settings.sleep_lieder_update):
         while True:
             if len(self.source) > 0:
-                init_res = self.mt5wrapper.init_mt(init_data=self.source['lieder'])
+                init_res = requests.post(url=self.source['lieder']['address'] + 'init/',
+                                         json=self.source['lieder'])
+
                 if not init_res:
                     await self.set_comment('Ошибка инициализации лидера')
                     await asyncio.sleep(sleep)
                     continue
-                get_account_info = self.mt5wrapper.get_account_info()
-                self.lieder_balance = get_account_info.balance
-                self.lieder_equity = get_account_info.equity
-                self.input_positions = self.mt5wrapper.get_positions()
+                get_account_info = dict(requests.get(url=self.source['lieder']['address'] + 'get-account-info/'))
+                self.lieder_balance = get_account_info.get('balance')
+                self.lieder_equity = get_account_info.get('equity')
+                self.input_positions = dict(requests.get(url=self.source['lieder']['address'] + 'get-positions/'))
 
                 if len(self.lieder_existed_position_tickets) == 0:
                     for _ in self.input_positions:
@@ -337,11 +340,14 @@ class TradingRobot:
             async with session.patch(url=url, data={"synchronize_deals": 'Нет'}) as resp:
                 await resp.json()
 
-    def get_investor_positions(self, only_own=True):
+    def get_investor_positions(self, address, only_own=True):
         """Количество открытых позиций"""
         result = []
         if len(self.source) > 0:
-            positions = self.mt5wrapper.get_positions()
+            try:
+                positions = requests.get(url=address + 'get-positions/')
+            except:
+                positions = False
             if not positions:
                 positions = []
             if only_own and len(positions) > 0:
@@ -355,12 +361,14 @@ class TradingRobot:
 
     def get_investors_positions_count(self, investor, only_own=True):
         """Количество открытых позиций"""
-        return len(self.get_investor_positions(investor)) if only_own else len(self.get_investor_positions(False))
+        return len(self.get_investor_positions(address=investor['address'])) if only_own \
+            else len(self.get_investor_positions(address=investor['address'], only_own=False))
 
     def close_position(self, investor, position, reason):
         """Закрытие указанной позиции"""
-        self.mt5wrapper.init_mt(init_data=investor)
-        tick = self.mt5wrapper.get_symbol_info_tick(position.symbol)
+        requests.post(url=investor['address'] + 'init/',
+                      json=investor)
+        tick = dict(requests.get(url=investor['address'] + 'get-symbol-info-tick', params={'symbol': position.symbol}))
         if not tick:
             return
         new_comment_str = position.comment
@@ -369,27 +377,28 @@ class TradingRobot:
             comment.reason = reason
             new_comment_str = comment.string()
         request = {
-            'action': self.mt5wrapper.get_trade_action_deal(),
+            'action': requests.get(investor['address'] + 'get-trade-action-deal/'),
             'position': position.ticket,
             'symbol': position.symbol,
             'volume': position.volume,
-            'type': self.mt5wrapper.get_order_type_buy() if position.type == 1
-            else self.mt5wrapper.get_order_type_sell(),
-            'price': tick.ask if position.type == 1 else tick.bid,
+            'type': requests.get(investor['address'] + 'get-order-type-buy/') if position.type == 1
+            else requests.get(investor['address'] + 'get-order-type-sell/'),
+            'price': tick.get('ask') if position.type == 1 else tick.get('bid'),
             'deviation': settings.DEVIATION,
             'magic:': settings.MAGIC,
             'comment': new_comment_str,
-            'type_tim': self.mt5wrapper.get_order_time_gtc(),
-            'type_filing': self.mt5wrapper.get_order_filling_ioc()
+            'type_tim': requests.get(investor['address'] + 'get-order-time-gtc/'),
+            'type_filing': requests.get(investor['address'] + 'get-order-filling-ioc/'),
         }
-        result = self.mt5wrapper.order_send(request)
+        result = requests.post(url=investor['address'] + 'order-send/', data=request)
         return result
 
     def force_close_all_positions(self, investor, reason):
         """Принудительное закрытие всех позиций аккаунта"""
-        init_res = self.mt5wrapper.init_mt(init_data=investor)
+        init_res = requests.post(url=investor['address'] + 'init/',
+                                 json=investor)
         if init_res:
-            positions = self.get_investor_positions(only_own=False)
+            positions = self.get_investor_positions(address=investor['address'], only_own=False)
             if len(positions) > 0:
                 for position in positions:
                     if position.magic == settings.MAGIC and DealComment.is_valid_string(position.comment):
@@ -409,11 +418,12 @@ class TradingRobot:
             elif investor['accompany_transactions'] == 'Нет':  # если сделки оставить и не сопровождать
                 await self.disable_dcs(investor)
 
-    def get_history_profit(self):
+    def get_history_profit(self, address):
         """Расчет прибыли по истории"""
         date_from = self.start_date_utc + settings.SERVER_DELTA_TIME
         date_to = datetime.now().replace(microsecond=0) + timedelta(days=1)
-        deals = self.mt5wrapper.get_history_deals_get_with_date(date_from=date_from, date_to=date_to)
+        deals = requests.get(url=address + 'get-history-deals-get-with-date/', params={'date_from': date_from,
+                                                                                       'date_to': date_to})
 
         if not deals:
             deals = []
@@ -424,7 +434,8 @@ class TradingRobot:
             if len(deals) > 0:
                 for pos in deals:
                     if DealComment.is_valid_string(pos.comment):
-                        linked_pos = self.mt5wrapper.get_history_deals_get_with_pos_id(position_id=pos.position_id)
+                        linked_pos = dict(requests.get(url=address + 'get-history-deals-get-with-pos-id/',
+                                                       params={'position_id': pos.position_id}))
                         for lp in linked_pos:
                             if lp.ticket not in pos_tickets:
                                 # print(linked_pos.index(lp), datetime.utcfromtimestamp(lp.time), ' ', lp.ticket, ' ',
@@ -441,9 +452,9 @@ class TradingRobot:
             result = None
         return result
 
-    def get_positions_profit(self):
+    def get_positions_profit(self, address):
         """Расчет прибыли текущих позиций"""
-        positions = self.get_investor_positions(only_own=True)
+        positions = self.get_investor_positions(address=address, only_own=True)
         result = 0
         if len(positions) > 0:
             for pos in positions:
@@ -458,16 +469,18 @@ class TradingRobot:
             start_balance = 1
         limit_size = investor['stop_value']
         calc_limit_in_percent = True if investor['stop_loss'] == 'Процент' else False
-        self.mt5wrapper.init_mt(investor)
-        history_profit = self.get_history_profit()
-        current_profit = self.get_positions_profit()
+        requests.post(url=investor['address'] + 'init/',
+                      json=investor)
+        history_profit = self.get_history_profit(address=investor['address'])
+        current_profit = self.get_positions_profit(investor['address'])
         # SUMM TOTAL PROFIT
         if history_profit is None or current_profit is None:
             return
         close_positions = False
         total_profit = history_profit + current_profit
         print(
-            f' - {investor["login"]} [{investor["currency"]}] - {len(self.mt5wrapper.get_positions())} positions. Access:',
+            f' - {investor["login"]} [{investor["currency"]}]'
+            f' - {len(list(requests.get(investor["address"] + "get-positions/")))} positions. Access:',
             investor['dcs_access'], end='')
         print('\t', 'Прибыль' if total_profit >= 0 else 'Убыток', 'торговли c', self.start_date_utc,
               ':', round(total_profit, 2), investor['currency'],
@@ -481,7 +494,7 @@ class TradingRobot:
             elif fabs(total_profit) >= limit_size:
                 close_positions = True
             # CLOSE ALL POSITIONS
-            active_positions = self.get_investor_positions()
+            active_positions = self.get_investor_positions(address=investor['address'])
             if close_positions and len(active_positions) > 0:
                 print('     Закрытие всех позиций по условию стоп-лосс')
                 await self.set_comment('Закрытие всех позиций по условию стоп-лосс. Убыток торговли c' + str(
@@ -502,11 +515,13 @@ class TradingRobot:
                 if investors_balance != settings.old_investors_balance[login]:
                     volume_change_coefficient = investors_balance / settings.old_investors_balance[login]
                     if volume_change_coefficient != 1.0:
-                        self.mt5wrapper.init_mt(investor)
+                        requests.post(url=investor['address'] + 'init/',
+                                      json=investor)
                         investors_positions_table = LinkedPositions.get_linked_positions_table(
-                            self.get_investor_positions())
+                            self.get_investor_positions(address=investor['address']))
                         for _ in investors_positions_table:
-                            min_lot = self.mt5wrapper.get_symbol_info(_.symbol).volume_min
+                            min_lot = dict(requests.get(investor['address'] + 'get-symbol-info/',
+                                                        params={'symbol': _.symbol})).get('volume_min')
                             decimals = str(min_lot)[::-1].find('.')
                             volume = _.volume
                             new_volume = round(volume_change_coefficient * volume, decimals)
@@ -516,32 +531,39 @@ class TradingRobot:
         except Exception as e:
             print("Exception in synchronize_positions_volume():", e)
 
-    def get_pos_pips_tp(self, position, price=None):
+    @staticmethod
+    def get_pos_pips_tp(address, position, price=None):
         """Расчет Тейк-профит в пунктах"""
         if price is None:
             price = position.price_open
         result = 0.0
         if position.tp > 0:
-            result = round(fabs(price - position.tp) / self.mt5wrapper.get_symbol_info(position.symbol).point)
+            result = round(
+                fabs(price - position.tp) / dict(requests.get(url=address, params={"symbol": position.symbol})).get(
+                    'point'))
         return result
 
-    def get_pos_pips_sl(self, position, price=None):
+    @staticmethod
+    def get_pos_pips_sl(address, position, price=None):
         """Расчет Стоп-лосс в пунктах"""
         if price is None:
             price = position.price_open
         result = 0.0
         if position.sl > 0:
-            result = round(fabs(price - position.sl) / self.mt5wrapper.get_symbol_info(position.symbol).point)
+            result = round(
+                fabs(price - position.sl) / dict(requests.get(url=address, params={"symbol": position.symbol})).get(
+                    'point'))
         return result
 
     def synchronize_positions_limits(self, investor):
         """Изменение уровней ТП и СЛ указанной позиции"""
-        self.mt5wrapper.init_mt(investor)
+        requests.post(url=investor['address'] + 'init/',
+                      json=investor)
         for l_pos in self.lieder_positions:
-            l_tp = self.get_pos_pips_tp(l_pos)
-            l_sl = self.get_pos_pips_sl(l_pos)
+            l_tp = self.get_pos_pips_tp(address=investor['address'], position=l_pos)
+            l_sl = self.get_pos_pips_sl(address=investor['address'], position=l_pos)
             if l_tp > 0 or l_sl > 0:
-                for i_pos in self.get_investor_positions():
+                for i_pos in self.get_investor_positions(address=investor['address']):
                     request = []
                     new_comment_str = comment = ''
                     if DealComment.is_valid_string(i_pos.comment):
@@ -549,8 +571,8 @@ class TradingRobot:
                         comment.reason = '09'
                         new_comment_str = comment.string()
                     if comment.lieder_ticket == l_pos.ticket:
-                        i_tp = self.get_pos_pips_tp(i_pos)
-                        i_sl = self.get_pos_pips_sl(i_pos)
+                        i_tp = self.get_pos_pips_tp(address=investor['address'], position=i_pos)
+                        i_sl = self.get_pos_pips_sl(address=investor['address'], position=i_pos)
                         sl_lvl = tp_lvl = 0.0
                         if i_pos.type == self.mt5wrapper.get_order_type_buy():
                             sl_lvl = i_pos.price_open - l_sl * self.mt5wrapper.get_symbol_info(i_pos.symbol).point
@@ -572,8 +594,8 @@ class TradingRobot:
                         result = self.mt5wrapper.order_send(request)
                         print('Лимит изменен:', result)
 
-    def is_lieder_position_in_investor(self, lieder_position):
-        invest_positions = self.get_investor_positions(only_own=False)
+    def is_lieder_position_in_investor(self, investor_address, lieder_position):
+        invest_positions = self.get_investor_positions(address=investor_address, only_own=False)
         if len(invest_positions) > 0:
             for pos in invest_positions:
                 if DealComment.is_valid_string(pos.comment):
@@ -604,8 +626,9 @@ class TradingRobot:
 
     def is_position_opened(self, lieder_position, investor):
         """Проверка позиции лидера на наличие в списке позиций и истории инвестора"""
-        self.mt5wrapper.init_mt(init_data=investor)
-        if self.is_lieder_position_in_investor(lieder_position=lieder_position):
+        requests.post(url=investor['address'] + 'init/',
+                      json=investor)
+        if self.is_lieder_position_in_investor(investor_address=investor['address'], lieder_position=lieder_position):
             return True
 
         exist_position, closed_by_sl = self.is_lieder_position_in_investor_history(lieder_position=lieder_position)
@@ -637,9 +660,10 @@ class TradingRobot:
         investment_size = investor['investment_size']
         get_for_balance = True if investor['multiplier'] == 'Баланс' else False
         if get_for_balance:
-            ext_k = (investment_size + self.get_history_profit()) / lieder_balance_value
+            ext_k = (investment_size + self.get_history_profit(address=investor['address'])) / lieder_balance_value
         else:
-            ext_k = (investment_size + self.get_history_profit() + self.get_positions_profit()) / lieder_balance_value
+            ext_k = (investment_size + self.get_history_profit(address=investor['address']) + self.get_positions_profit(
+                investor['address'])) / lieder_balance_value
         try:
             min_lot = self.mt5wrapper.get_symbol_info(symbol).volume_min
             decimals = str(min_lot)[::-1].find('.')
@@ -653,8 +677,9 @@ class TradingRobot:
 
     def close_positions_by_lieder(self, investor):
         """Закрытие позиций инвестора, которые закрылись у лидера"""
-        self.mt5wrapper.init_mt(init_data=investor)
-        positions_investor = self.get_investor_positions()
+        requests.post(url=investor['address'] + 'init/',
+                      json=investor)
+        positions_investor = self.get_investor_positions(address=investor['address'])
         non_existed_positions = []
         if positions_investor:
             for ip in positions_investor:
@@ -713,13 +738,11 @@ class TradingRobot:
             currency_coefficient = 1
         return currency_coefficient
 
-    def get_lots_for_investment(self, symbol, investment):
-        # investment = 1259
-        # smb = 'GBPUSD'
+    def get_lots_for_investment(self, address, symbol, investment):
         print(
             f'\nsymbol: {symbol}')  # currency_base: {Mt.symbol_info(smb).currency_base}  currency_profit: {Mt.symbol_info(smb).currency_profit}  currency_margin: {Mt.symbol_info(smb).currency_margin}')
         price = self.mt5wrapper.get_symbol_info_tick(symbol).bid
-        leverage = self.mt5wrapper.get_account_info().leverage
+        leverage = dict(requests.get(url=address + 'get-account-info/')).get('leverage')
         contract = self.mt5wrapper.get_symbol_info(symbol).trade_contract_size
 
         min_lot = self.mt5wrapper.get_symbol_info(symbol).volume_min
@@ -739,7 +762,8 @@ class TradingRobot:
 
     async def edit_volume_for_margin(self, investor, request):
         """Расчет объема при недостатке маржи и проверка на максимальный"""
-        self.mt5wrapper.init_mt(investor)
+        requests.post(url=investor['address'] + 'init/',
+                      json=investor)
 
         response = self.mt5wrapper.order_check(request)
         if not response or len(response) <= 0:
@@ -755,10 +779,12 @@ class TradingRobot:
             if investor['not_enough_margin'] == 'Минимальный объем':
                 request['volume'] = self.mt5wrapper.get_symbol_info(request['symbol']).volume_min
             elif investor['not_enough_margin'] == 'Достаточный объем':
-                hst_profit = self.get_history_profit()
-                cur_profit = self.get_positions_profit()
+                hst_profit = self.get_history_profit(address=investor['address'])
+                cur_profit = self.get_positions_profit(investor['address'])
                 balance = investor['investment_size'] + hst_profit + cur_profit
-                volume = self.get_lots_for_investment(symbol=request['symbol'], investment=balance)
+                volume = self.get_lots_for_investment(address=investor['address'],
+                                                      symbol=request['symbol'],
+                                                      investment=balance)
                 request['volume'] = volume
             elif investor['not_enough_margin'] == 'Не открывать' \
                     or investor['not_enough_margin'] == 'Не выбрано':
@@ -831,7 +857,12 @@ class TradingRobot:
         if not synchronize:
             return
 
-        init_res = self.mt5wrapper.init_mt(init_data=investor)
+        try:
+            init_res = requests.post(url=investor['address'] + 'init/',
+                                     json=investor)
+        except:
+            init_res = False
+
         if not init_res:
             await self.set_comment('Ошибка инициализации инвестора ' + str(investor['login']))
             return
@@ -846,9 +877,10 @@ class TradingRobot:
             self.synchronize_positions_limits(investor)  # коррекция лимитов позиций
 
             for pos_lid in self.lieder_positions:
-                inv_tp = self.get_pos_pips_tp(pos_lid)
-                inv_sl = self.get_pos_pips_sl(pos_lid)
-                self.mt5wrapper.init_mt(investor)
+                inv_tp = self.get_pos_pips_tp(address=investor['address'], position=pos_lid)
+                inv_sl = self.get_pos_pips_sl(address=investor['address'], position=pos_lid)
+                requests.post(url=investor['address'] + 'init/',
+                              json=investor)
                 if not self.is_position_opened(pos_lid, investor):
                     ret_code = None
                     if self.check_transaction(investor=investor, lieder_position=pos_lid):
