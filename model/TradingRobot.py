@@ -62,7 +62,7 @@ class TradingRobot:
             }
             main_source['investors'] = [
                 {
-                    'terminal_path': r'C:\Program Files\MetaTrader 5_2\terminal64.exe',
+                    'address': r'http://localhost:8000/investor/',
                     'login': int(response['investor_one_login']),
                     'password': response['investor_one_password'],
                     'server': response['investor_one_server'],
@@ -107,7 +107,7 @@ class TradingRobot:
                     "comment": response['comment'],
                 },
                 {
-                    'terminal_path': r'C:\Program Files\MetaTrader 5_3\terminal64.exe',
+                    'address': r'http://localhost:8001/investor/',
                     'login': int(response['investor_two_login']),
                     'password': response['investor_two_password'],
                     'server': response['investor_two_server'],
@@ -164,10 +164,15 @@ class TradingRobot:
             inf = self.mt5wrapper.get_account_info()
             main_source['lieder']['currency'] = inf.currency if inf else '-'
             for _ in main_source['investors']:
-                idx = main_source['investors'].index(_)
-                self.mt5wrapper.init_mt(main_source['investors'][idx])
-                inf = self.mt5wrapper.get_account_info()
-                main_source['investors'][idx]['currency'] = inf.currency if inf else '-'
+                try:
+                    idx = main_source['investors'].index(_)
+                    requests.post(url=main_source['investors'][idx]['address']+'init-terminal/',
+                                  json=main_source['investors'][idx])
+
+                    inf = self.mt5wrapper.get_account_info()
+                    main_source['investors'][idx]['currency'] = inf.currency if inf else '-'
+                except Exception as e:
+                    print("Request init mt5:", e)
         else:
             self.lieder_existed_position_tickets = []
         self.source = main_source.copy()
@@ -722,9 +727,6 @@ class TradingRobot:
         decimals = str(lot_step)[::-1].find('.')
 
         volume_none_round = (investment * leverage) / (contract * price)
-        # volume = floor((investment * leverage) / (contract * price) / lot_step) * lot_step
-        # print(floor((investment * leverage) / (contract * price) / lot_step), lot_step)
-        # print(f'Неокругленный объем: {volume_none_round}  Округленный объем: {volume}')
         if volume_none_round < min_lot:
             volume = 0.0
         else:
@@ -733,16 +735,11 @@ class TradingRobot:
         print(
             f'Размер инвестиции: {investment}  Курс: {price}  Контракт: {contract}  Плечо: {leverage}  >>  ОБЪЕМ: {volume}')
 
-        # calc_margin = Mt.order_calc_margin(0, symbol, volume, price)
-        # print('Стоимость сделки:', calc_margin,
-        #       f' Остаток: {round(investment - calc_margin, 2)}' if calc_margin else 'Не хватает средств')
         return volume
 
     async def edit_volume_for_margin(self, investor, request):
         """Расчет объема при недостатке маржи и проверка на максимальный"""
         self.mt5wrapper.init_mt(investor)
-
-        # print(Mt.symbol_info(request['symbol']).path)
 
         response = self.mt5wrapper.order_check(request)
         if not response or len(response) <= 0:
@@ -763,29 +760,6 @@ class TradingRobot:
                 balance = investor['investment_size'] + hst_profit + cur_profit
                 volume = self.get_lots_for_investment(symbol=request['symbol'], investment=balance)
                 request['volume'] = volume
-                # acc_inf = Mt.account_info()
-                # margin = acc_inf.margin if acc_inf else 0
-                #
-                # symbol_coefficient = 100 if 'Forex' in info.path else 1
-                # start_mrg = info.margin_initial if info.margin_initial and info.margin_initial > 0 else 1
-                # shoulder = 1 / start_mrg * symbol_coefficient
-                #
-                # contract_specification = info.trade_contract_size
-                # price = Mt.symbol_info_tick(request['symbol']).bid
-                # lot_price = contract_specification * price
-                # hst_profit = get_history_profit()
-                # cur_profit = get_positions_profit()
-                # balance = investor['investment_size'] + hst_profit + cur_profit - margin
-                # min_lot = info.volume_min
-                # decimals = str(min_lot)[::-1].find('.')
-                # result_vol = round((balance / lot_price) / shoulder, decimals)
-                # print('((' + str(investor['investment_size']), '+', hst_profit, '+', cur_profit, '- ', str(margin) + ')',
-                #       '/', lot_price, ') / ', shoulder, '=', result_vol)
-                # if result_vol < min_lot:
-                #     result_vol = min_lot
-                # request['volume'] = result_vol
-
-                # return -1
             elif investor['not_enough_margin'] == 'Не открывать' \
                     or investor['not_enough_margin'] == 'Не выбрано':
                 request = None
